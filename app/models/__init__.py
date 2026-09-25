@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float, Boolean, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -224,3 +224,87 @@ class DatasetSubscription(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     dataset = relationship("Dataset", back_populates="subscriptions")
+
+
+class ScoringStrategy(Base):
+    """质量评分策略版本：权重、阈值、适用范围与生效时间。
+
+    状态机：draft -> active -> retired。draft 可编辑可参与只读对比；
+    active 为当前生效版本；retired 为被替换下线的历史版本，可通过回滚重新激活。
+    """
+    __tablename__ = "scoring_strategies"
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_scoring_strategy_name_version"),
+    )
+
+    STATUS_DRAFT = "draft"
+    STATUS_ACTIVE = "active"
+    STATUS_RETIRED = "retired"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default=STATUS_DRAFT, index=True)
+
+    completeness_weight = Column(Float, nullable=False)
+    annotation_weight = Column(Float, nullable=False)
+    thresholds = Column(JSON, nullable=False)
+    scope = Column(JSON, nullable=False, default=dict)
+    effective_at = Column(DateTime(timezone=True), nullable=True)
+
+    note = Column(Text, nullable=True)
+    created_by = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    activated_at = Column(DateTime(timezone=True), nullable=True)
+    retired_at = Column(DateTime(timezone=True), nullable=True)
+
+    audits = relationship("StrategyAudit", back_populates="strategy", cascade="all, delete-orphan")
+
+
+class StrategyComparison(Base):
+    """两个策略版本在同一组作业上的只读对比报告。
+
+    报告在创建时把输入快照（作业ID及其评分输入）与计算结果一并落库，
+    之后读取只返回已保存内容，新增或变更数据不影响已保存的报告。
+    """
+    __tablename__ = "strategy_comparisons"
+
+    id = Column(Integer, primary_key=True, index=True)
+    base_strategy_id = Column(Integer, ForeignKey("scoring_strategies.id"), nullable=False, index=True)
+    candidate_strategy_id = Column(Integer, ForeignKey("scoring_strategies.id"), nullable=False, index=True)
+
+    base_snapshot = Column(JSON, nullable=False)
+    candidate_snapshot = Column(JSON, nullable=False)
+    sample_filter = Column(JSON, nullable=False)
+    input_snapshot = Column(JSON, nullable=False)
+    input_digest = Column(String(64), nullable=False)
+    result = Column(JSON, nullable=False)
+    sample_count = Column(Integer, nullable=False, default=0)
+
+    note = Column(Text, nullable=True)
+    created_by = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    base_strategy = relationship("ScoringStrategy", foreign_keys=[base_strategy_id])
+    candidate_strategy = relationship("ScoringStrategy", foreign_keys=[candidate_strategy_id])
+
+
+class StrategyAudit(Base):
+    """策略生命周期审计记录，含激活、自动下线与回滚。"""
+    __tablename__ = "strategy_audits"
+
+    ACTION_CREATE = "create"
+    ACTION_UPDATE = "update"
+    ACTION_ACTIVATE = "activate"
+    ACTION_RETIRE = "retire"
+    ACTION_ROLLBACK = "rollback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    strategy_id = Column(Integer, ForeignKey("scoring_strategies.id"), nullable=False, index=True)
+    action = Column(String(20), nullable=False, index=True)
+    actor = Column(String(100), nullable=True)
+    detail = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    strategy = relationship("ScoringStrategy", back_populates="audits")

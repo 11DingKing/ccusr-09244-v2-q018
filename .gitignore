@@ -14,6 +14,8 @@ data/*.db-journal
 data/*.mv.db
 data/*.trace.db
 venv/
+.venv/
+/robot_data.db
 __pycache__/
 *.pyc
 .mypy_cache/

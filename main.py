@@ -1,9 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.database import engine, Base
-from app.routers import common, operation, dataset, analytics
+from app.routers import common, operation, dataset, analytics, strategy
+from app.services.strategy import (
+    StrategyConflictError,
+    StrategyError,
+    StrategyNotFoundError,
+)
 
 
 def create_tables():
@@ -61,6 +67,12 @@ app = FastAPI(
 ### 数据质量分级
 - 按完整度和标注质量自动评分分级（A/B/C/D）
 
+### 评分策略版本与只读对比
+- 策略版本保存权重、阈值、适用范围与生效时间（草稿/生效/下线）
+- 两个版本在同一组作业上对比：等级迁移、边界样本、数据集汇总差异
+- 对比只读不改写当前等级，报告绑定输入快照
+- 发布处理范围重叠与并发激活，支持回滚并保留审计记录
+
 ### 统计分析
 - 按机型、场景统计数据量
 - 标注完成率、复用率
@@ -85,6 +97,22 @@ app.include_router(common.router, prefix=api_prefix)
 app.include_router(operation.router, prefix=api_prefix)
 app.include_router(dataset.router, prefix=api_prefix)
 app.include_router(analytics.router, prefix=api_prefix)
+app.include_router(strategy.router, prefix=api_prefix)
+
+
+@app.exception_handler(StrategyNotFoundError)
+def handle_strategy_not_found(request: Request, exc: StrategyNotFoundError):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(StrategyConflictError)
+def handle_strategy_conflict(request: Request, exc: StrategyConflictError):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(StrategyError)
+def handle_strategy_error(request: Request, exc: StrategyError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.get("/", tags=["首页"])
