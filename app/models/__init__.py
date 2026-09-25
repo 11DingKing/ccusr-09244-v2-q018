@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float, Boolean, JSON, Index, text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -224,3 +224,78 @@ class DatasetSubscription(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     dataset = relationship("Dataset", back_populates="subscriptions")
+
+
+class QualityPolicy(Base):
+    """质量评分策略版本。草稿可反复修改；一旦激活内容即不可变。"""
+
+    __tablename__ = "quality_policies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    version = Column(Integer, nullable=False, unique=True, index=True)
+    name = Column(String(200), nullable=False)
+    status = Column(String(20), nullable=False, default="draft", index=True)
+
+    weights = Column(JSON, nullable=False)
+    thresholds = Column(JSON, nullable=False)
+    scope = Column(JSON, nullable=False, default=dict)
+    scope_key = Column(String(200), nullable=False, default="")
+    effective_at = Column(DateTime(timezone=True), nullable=False)
+
+    content_hash = Column(String(64), nullable=False)
+    activated_at = Column(DateTime(timezone=True), nullable=True)
+    deactivated_at = Column(DateTime(timezone=True), nullable=True)
+    superseded_by = Column(Integer, ForeignKey("quality_policies.id"), nullable=True)
+    created_by = Column(String(100), nullable=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index(
+            "uq_quality_policy_active_scope",
+            "scope_key",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
+
+    audit_logs = relationship(
+        "QualityPolicyAuditLog", back_populates="policy",
+        cascade="all, delete-orphan",
+    )
+
+
+class QualityPolicyAuditLog(Base):
+    """策略生命周期审计记录：创建、改稿、激活（含失败）、取代、回滚。"""
+
+    __tablename__ = "quality_policy_audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    policy_id = Column(Integer, ForeignKey("quality_policies.id"), nullable=False, index=True)
+    action = Column(String(30), nullable=False, index=True)
+    detail = Column(JSON, nullable=True)
+    actor = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    policy = relationship("QualityPolicy", back_populates="audit_logs")
+
+
+class QualityComparisonReport(Base):
+    """两个策略版本在同一组作业上的只读比较结果，绑定输入快照，永久不可变。"""
+
+    __tablename__ = "quality_comparison_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    left_policy_id = Column(Integer, ForeignKey("quality_policies.id"), nullable=False)
+    right_policy_id = Column(Integer, ForeignKey("quality_policies.id"), nullable=False)
+    baseline_label = Column(String(50), nullable=False, default="baseline")
+    candidate_label = Column(String(50), nullable=False, default="candidate")
+    sample_count = Column(Integer, nullable=False, default=0)
+    changed_count = Column(Integer, nullable=False, default=0)
+    boundary_count = Column(Integer, nullable=False, default=0)
+    snapshot_hash = Column(String(64), nullable=False)
+    input_snapshot_json = Column(JSON, nullable=False)
+    result_json = Column(JSON, nullable=False)
+    created_by = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
